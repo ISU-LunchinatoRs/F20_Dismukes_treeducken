@@ -1,0 +1,160 @@
+---
+title: Using treeducken for cophylogenetic simulation
+author: Wade Dismukes
+date: '2020-10-07'
+---
+
+## Setting up
+In this post, I will give a brief exploration of the features available for cophylogenetic simulation in my new R package: `treeducken`.
+First, you will need to install the package and then load it:
+
+```{r}
+# install.packages("treeducken")
+library(treeducken)
+```
+
+
+## Motivation
+
+Hosts and their parasites or mutualists (we're going to call these symbionts) that are ecologically dependent are thought to evolve together through time.
+This is thought to cause the phylogenies (i.e. evolutionary trees) of the host and the symbiont to be identical.
+This is not often seen in empirical systems so researchers have devised two main methods of examining this data: global-fit methods and event-based methods. 
+Global-fit methods infer the shared phylogenetic signal between the two trees, asking the question of whether the two trees and the ecological associations at the tips are more similar to each other than we would expect due to chance.
+Event-based methods use events such as cospeciation (when a host and symbiont speciate simultaneously) or host-switching to explain the differences between the host and symbiont tree.
+Each event is given a cost, and the events are used to map the symbiont tree onto the host tree with the intent of finding the mapping with the lowest cost.
+
+Inherent in these event-based methods is the idea that the two trees are evolving in tandem and that these events occur at different rates.
+In other words, there is an implicit model that we assume generates our data. 
+However, few of these event-based methods use statistical models as the basis for the event costs, and there are only a handful of statistical models for generating this data (Keller et al. 2012, Baudet et al. 2015).
+Neither of these models allows for extinction in the host and symbiont trees.
+We provide an additional generative model that accounts for extinction, and also it is R which is a bit nicer than a command line interface program.
+
+
+## Set parameters and simulate!
+
+First I need to set some parameters.
+Currently, there is only a  way to simulate to a pre-specified time.
+We need to set six parameters: host speciation and extinction rate, symbiont speciation and extinction rate, host expansion rate, and cospeciation rate.
+These rates are set relative to the time; for example setting the speciation to 0.1 translates to 1 speciation every 10 time units. 
+To assist with determining these parameters, we provide functions that calculate the expected numbers of tips under the SSA.
+In this code chunk we draw some random parameters for our host and symbiont birth rates, and calculate their expected numbers of tips.
+We then use these randomly drawn parameters to simulate under the cophylogenetic process.
+Figure 3 shows the output of one such simulation.
+
+
+```{r setting-params}
+set.seed(54)
+lambda_H <- rexp(n=1)
+mu_H <- lambda_H / 2
+lambda_C <- rexp(n=1)
+time <- 1.0
+
+lambda_S <- rexp(n=1)
+mu_S <- lambda_S / 2
+
+H_tips <- treeducken::calculate_expected_leaves_sptree(lambda = lambda_H + lambda_C,
+                                                       mu = mu_H,
+                                                       t = time)
+
+S_tips <- treeducken::calculate_expected_leaves_sptree(lambda = lambda_S + lambda_C,
+                                                       mu = mu_S,
+                                                       t = time)
+cophy_obj <- treeducken::sim_cophylo_bdp(hbr = lambda_H, hdr = mu_H,
+                                         sbr = lambda_S, sdr = mu_S,
+                                         cosp_rate = lambda_C, host_exp_rate = 0.0,
+                                         time_to_sim = time, numbsim = 1)
+plot(cophy_obj[[1]], col = "orange", lty = "dotted")
+```
+
+## Other features
+
+Cophylogenetic objects are output as an S3 object of class `cophy` with many S3 generic functions implemented including `summary`, `plot` (see above), `c()` and `print`.
+The structure of this class is largely based on the `cophylo` S3 object of PhyTools, and we modified code written for generic function definitions from the APE package. 
+Here I've provided some examples of the generic functions, more are provided within the documentation.
+
+See `print()` below:
+
+```{r}
+print(cophy_obj, details = TRUE)
+summary(cophy_obj[[1]])
+```
+
+Or `summary`:
+
+```{r}
+summary(cophy_obj[[1]])
+```
+
+We can also calculate (a limited amount of) summary statistics for our treeset. There is a function to calculate some for all of the `cophy` objects in a list, or some are available separately (e.g. `parafit_test`):
+
+```{r}
+df <- treeducken::cophy_summary_stat(cophy_obj)
+D <- treeducken::parafit_stat(cophy_obj[[1]]$host_tree,
+                              cophy_obj[[1]]$symb_tree,
+                              cophy_obj[[1]]$association_mat)
+treeducken::parafit_test(cophy_obj[[1]]$host_tree,
+                              cophy_obj[[1]]$symb_tree,
+                              cophy_obj[[1]]$association_mat,
+                         D = D,
+                         reps = 99)
+```
+The event numbers such as "Cospeciations" and "Host_Speciations" here are only calculated if the `Event_DF` member of the `cophy` object is present. 
+This will always be there if you simulate data using `sim_cophylo_bdp()`, but won't be if you use the built-in functions to setup a cophylogenetic object. I provide an example of doing that with the classic Hafner and Page gopher-louse dataset below:
+
+```{r}
+gopher_lice_map <- read.table(system.file("extdata",
+                                          "gopher_lice_mapping.txt",
+                                          package = "treeducken"),
+                              stringsAsFactors = FALSE, header = TRUE)
+
+gopher_lice_assoc_matrix <- convert_assoc_table_to_matrix(gopher_lice_map)
+gopher_tree <- ape::read.nexus(system.file("extdata",
+                                           "gophers_bd.tre",
+                                           package = "treeducken"))
+lice_tree <- ape::read.nexus(system.file("extdata",
+                                         "lice_bd.tre",
+                                         package = "treeducken"))
+gopher_lice_cophylo <- convert_to_cophy(hostTree = gopher_tree,
+                                          symbTree = lice_tree,
+                                          assocMat = gopher_lice_assoc_matrix)
+print(gopher_lice_cophylo)
+cophy_summary_stat(gopher_lice_cophylo)
+
+plot(gopher_lice_cophylo,
+     fsize = 0.5,
+     show_tip_label = FALSE,
+     gap = 1,
+     col = "purple",
+     lty = "dashed")
+```
+
+## Using `treeducken` with PACo
+
+I can use the `treeducken` output with the [`paco` package](https://cran.r-project.org/web/packages/paco/index.html).
+If there are extinct tips in the host or symbiont tree these need to be pruned off prior to being used with the `paco` package.
+Pruning can be done with the `drop_extinct` function.
+
+```{r paco-example}
+library(paco)
+host_tree_pruned <- drop_extinct(cophy_obj[[1]]$host_tree)
+symb_tree_pruned <- drop_extinct(cophy_obj[[1]]$symb_tree)
+A <- association_mat(cophy_obj[[1]])
+host_dist <- cophenetic(host_tree_pruned)
+symb_dist <- cophenetic(symb_tree_pruned)
+links <- t(A) # paco wants associations with rows as hosts 
+
+# we need to name rows and columns for paco
+rownames(links) <- host_tree_pruned$tip.label
+colnames(links) <- symb_tree_pruned$tip.label 
+D <- paco::prepare_paco_data(H = host_dist, P = symb_dist, HP = links)
+D <- paco::add_pcoord(D)
+D <- paco::PACo(D, nperm=100, seed = 11, method="r0")
+print(D$gof)
+```
+
+```
+## References
+
+Hutchinson, M. C., Cagua, E. F., Balbuena, J. A., Stouffer, D. B., & Poisot, T. (2017). paco: implementing Procrustean Approach to Cophylogeny in R. Methods in Ecology and Evolution, 8(8), 932-940.
+
+Hafner, M. S., & Page, R. D. (1995). Molecular phylogenies and host-parasite cospeciation: gophers and lice as a model system. Philosophical Transactions of the Royal Society of London. Series B: Biological Sciences, 349(1327), 77-83.
